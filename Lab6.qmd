@@ -323,6 +323,7 @@ summary(lm_base)$coefficients
 ### Making Predictions
 
 Now that lm_wf is a workflow, data is not embedded in the model, we can use augment with the new_data argument to make predictions on the test data.
+
 ```{r}
 lm_data <- augment(lm_wf, new_data = camels_test)
 dim(lm_data)
@@ -333,6 +334,7 @@ dim(lm_data)
 As with EDA, applying for graphical and statistical evaluation of the model is a key Here, we use the metrics function to extract the default metrics (rmse, rsq, mae) between the observed and predicted mean streamflow values.
 
 We then create a scatter plot of the observed vs predicted values, colored by aridity, to visualize the model performance.
+
 ```{r}
 metrics(lm_data, truth = logQmean, estimate = .pred)
 
@@ -343,7 +345,8 @@ ggplot(lm_data, aes(x = logQmean, y = .pred, colour = aridity)) +
   theme_linedraw()
 ```
 
-### Switch it Up! 
+### Switch it Up!
+
 ```{r}
 library(baguette)
 rf_model <- rand_forest() %>%
@@ -360,6 +363,7 @@ rf_wf <- workflow() %>%
 ```
 
 ### Predictions
+
 ```{r}
 rf_data <- augment(rf_wf, new_data = camels_test)
 dim(rf_data)
@@ -368,6 +372,7 @@ dim(rf_data)
 ## Model Evaluation: Statistical and Visual
 
 Evaluate the model using the metrics function and create a scatter plot of the observed vs predicted values, colored by aridity.
+
 ```{r}
 metrics(rf_data, truth = logQmean, estimate = .pred)
 
@@ -381,6 +386,7 @@ ggplot(rf_data, aes(x = logQmean, y = .pred, colour = aridity)) +
 ### A Workflowset Approach
 
 workflow_set is a powerful tool for comparing multiple models on the same data. It allows you to define a set of workflows, fit them to the same data, and evaluate their performance using a common metric. Here, we are going to create a workflow_set object with the linear regression and random forest models, fit them to the training data, and compare their performance using the autoplot and rank_results functions.
+
 ```{r}
 wf <- workflow_set(list(rec), list(lm_model, rf_model)) %>%
   workflow_map('fit_resamples', resamples = camels_cv) 
@@ -393,6 +399,7 @@ rank_results(wf, rank_metric = "rsq", select_best = TRUE)
 # Question 3: Your Turn! (20 points)
 
 ## Build a xgboost (engine) regression (mode) model using boost_tree
+
 ```{r}
 xgBoost_model <- boost_tree(mode = "regression",
                             trees = 1000) |>
@@ -400,12 +407,14 @@ xgBoost_model <- boost_tree(mode = "regression",
 ```
 
 ## Build a neural network model using the nnet engine from the baguette package using the bag_mlp function
+
 ```{r}
 NeuralNet_Model <- bag_mlp(mode = "regression") |>
   set_engine('nnet')
 ```
 
 ## Add this to the above workflow
+
 ```{r}
 xgbm_wf <- workflow() |>
   add_recipe(rec) |>
@@ -421,6 +430,7 @@ NeuralNet_Model_wf <- workflow() |>
 ```
 
 ## Evaluate the model and compare it to the linear and random forest models
+
 ```{r}
 metrics(xgbm_wf, truth = logQmean, estimate = .pred)
 metrics(NeuralNet_Model_wf, truth = logQmean, estimate = .pred)
@@ -443,21 +453,25 @@ autoplot(wf)
 
     # ANSWER: The boosted tree and neural network model returned the same results, whereas the results between the linear regression model and random forest model were slightly different. I would move forward with the boosted tree and neural network model because the results are right on the 1:1 line and the metrics have significance. 
 ```
+
 # Question 4: Build Your Own
 
-## Data Splitting 
+## Data Splitting
 
 ### Set a Seed
+
 ```{r}
 set.seed(123456)
 ```
 
 ### Create an initial split with 75% used for training and 25% for testing
+
 ```{r}
 resample_split <- initial_split(camels, prop = 0.75)
 ```
 
 ### Extract your training and testing sets
+
 ```{r}
 train_camels <- training(resample_split)
 glimpse(train_camels)
@@ -467,6 +481,7 @@ glimpse(test_camels)
 ```
 
 ### Build a 10-fold CV dataset as well
+
 ```{r}
 cv_folds <- vfold_cv(train_camels, v = 10)
 
@@ -476,15 +491,17 @@ cv_folds
 ## Recipe
 
 ### Define a formula you want to use to predict logQmean
+
 ```{r}
 formula <- logQmean ~ p_mean + aridity + high_prec_dur
 ```
 
 ### Describe in words why you are choosing the formula you are. Consult the downloaded PDF for the data to help you make this decision.
 
-I chose the formula I did with the predictor variables of p_mean, aridity, and logQmean because I think these are all factors that will influence mean daily discharge. Precipitation will influence discharge by inputting water into the system; aridity describes how dry an environment is so more arid environments will probably have lower logQmean; I think that high_prec_dur will correlate with logQmean because more high precipitation events will lead to more mean daily discharge. 
+I chose the formula I did with the predictor variables of p_mean, aridity, and logQmean because I think these are all factors that will influence mean daily discharge. Precipitation will influence discharge by inputting water into the system; aridity describes how dry an environment is so more arid environments will probably have lower logQmean; I think that high_prec_dur will correlate with logQmean because more high precipitation events will lead to more mean daily discharge.
 
 ### Build a recipe that you feel handles the predictors chosen well
+
 ```{r}
 train_camels <- na.omit(train_camels)
 
@@ -510,6 +527,7 @@ sum(is.infinite(as.matrix(baked_data))) # Should return 0
 ## Define 3 Models
 
 ### Define a random forest model using the rand_forest function & Set the engine to ranger and the mode to regression
+
 ```{r}
 Q4_rf_model <- rand_forest() %>%
   set_engine("ranger") %>%
@@ -517,6 +535,7 @@ Q4_rf_model <- rand_forest() %>%
 ```
 
 ### Define two other models of your choice
+
 ```{r}
 Q4_lm_model <- linear_reg() %>%
   set_engine("lm") %>%
@@ -529,7 +548,8 @@ Q4_gbm_model <- boost_tree() %>%
 
 ## Workflow Set
 
-### Create a workflow object, add the recipe, and add the models. Additionally, fit the models to the resamples. 
+### Create a workflow object, add the recipe, and add the models. Additionally, fit the models to the resamples.
+
 ```{r}
     # Define workflows 
 Q4_rf_wf <- workflow() |>
@@ -550,9 +570,10 @@ lm_results <- fit_resamples(Q4_lm_wf, resamples = cv_folds)
 gbm_results <- fit_resamples(Q4_gbm_wf, resamples = cv_folds)
 ```
 
-## Evaluation 
+## Evaluation
 
 ### Use autoplot and rank_results to compare the models.
+
 ```{r}
 wf <- workflow_set(list(rec), list(Q4_rf_model, Q4_lm_model, Q4_gbm_model)) %>%
   workflow_map('fit_resamples', resamples = camels_cv) 
@@ -564,11 +585,12 @@ rank_results(wf, rank_metric = "rsq", select_best = TRUE)
 
 ### Describe what model you think is best and why!
 
-I think that the random forest is the best model because it has the best ranked metrics for both RMSE and RSQ, indicating high coincidence in our model with the data. 
+I think that the random forest is the best model because it has the best ranked metrics for both RMSE and RSQ, indicating high coincidence in our model with the data.
 
 ## Extact and Evaluate
 
 ### Build a workflow (not workflow set) with your favorite model, recipe, and training data. Use fit to fit all training data to the model.
+
 ```{r}
 final_workflow <- workflow() |>
   add_recipe(rec) |>
@@ -577,11 +599,13 @@ final_workflow <- workflow() |>
 ```
 
 ### Use augment to make predictions on the test data
+
 ```{r}
 final_workflow_data <- augment(final_workflow, new_data = camels_test)
 ```
 
 ### Create a plot of the observed vs predicted values with clear title, axis labels, and a compelling color scale
+
 ```{r}
 ggplot(final_workflow_data, aes(x = .pred, y = logQmean, colour = logQmean)) +
   geom_point() +
@@ -594,5 +618,4 @@ ggplot(final_workflow_data, aes(x = .pred, y = logQmean, colour = logQmean)) +
 
 ### Describe what you think of the results!
 
-The results seem to be fairly accurate! The plotted points of observed versus predicted logQmean values are clustered along the 1:1 line, indicating strong accuracy of the model's predictions. It's awesome that I created a model that is able to predict logQmean based on the predictors I chose! 
-
+The results seem to be fairly accurate! The plotted points of observed versus predicted logQmean values are clustered along the 1:1 line, indicating strong accuracy of the model's predictions. It's awesome that I created a model that is able to predict logQmean based on the predictors I chose!

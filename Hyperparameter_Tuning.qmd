@@ -1,0 +1,351 @@
+---
+title: "Hyperparameter_Tuning"
+author: "Clara Jordan"
+format: html
+editor: visual
+---
+
+# Lab Set Up
+
+## Libraries
+```{r}
+library(dplyr)
+library(tidyverse)
+library(tidymodels)
+library(powerjoin)
+library(glue)
+library(vip)
+library(baguette)
+library(visdat)
+library(skimr)
+library(ggpubr)
+library(rsample)
+library(patchwork)
+```
+
+# 1. Data Import/Tidy/Transform
+
+## Read in the data
+```{r}
+root  <- 'https://gdex.ucar.edu/dataset/camels/file'
+
+download.file('https://gdex.ucar.edu/dataset/camels/file/camels_attributes_v2.0.pdf', 
+              'data/camels_attributes_v2.0.pdf')
+
+types <- c("clim", "geol", "soil", "topo", "vege", "hydro")
+
+# Where the files live online ...
+remote_files  <- glue('{root}/camels_{types}.txt')
+# where we want to download the data ...
+local_files   <- glue('data/camels_{types}.txt')
+
+walk2(remote_files, local_files, download.file, quiet = TRUE)
+```
+
+## Merge the data
+```{r}
+# Read and merge data
+camels <- map(local_files, read_delim, show_col_types = FALSE) 
+camels <- power_full_join(camels ,by = 'gauge_id')
+```
+
+## Data cleaning
+```{r}
+# Summary data 
+summary(camels)
+ls(camels)
+
+# Data cleaning
+camels <- na.omit(camels)
+
+## Visual EDA 
+
+# Create a scatter plot of aridity vs rainfall
+ggplot(camels, aes(x = aridity, y = p_mean)) +
+  # Add points colored by mean flow
+  geom_point(aes(color = q_mean)) +
+  # Add a linear regression line
+  geom_smooth(method = "lm", color = "red", linetype = 2) +
+  # Apply the viridis color scale
+  scale_color_viridis_c() +
+  # Add a title, axis labels, and theme (w/ legend on the bottom)
+  theme_linedraw() + 
+  theme(legend.position = "bottom") + 
+  labs(title = "Aridity vs Rainfall vs Runnoff", 
+       x = "Aridity", 
+       y = "Rainfall",
+       color = "Mean Flow")
+
+## Visual EDA with transformation
+ggplot(camels, aes(x = aridity, y = p_mean)) +
+  geom_point(aes(color = q_mean)) +
+  geom_smooth(method = "lm") +
+  scale_color_viridis_c() +
+  # Apply log transformations to the x and y axes
+  scale_x_log10() + 
+  scale_y_log10() +
+  theme_linedraw() +
+  theme(legend.position = "bottom") + 
+  labs(title = "Aridity vs Rainfall vs Runnoff", 
+       x = "Aridity", 
+       y = "Rainfall",
+       color = "Mean Flow")
+```
+
+## Data splitting
+```{r}
+# Set Seed
+set.seed(456654)
+
+# Bad form to perform simple transformations on the outcome variable within a recipe. So, we'll do it here.
+camels <- camels |> 
+  mutate(logQmean = log(q_mean))
+
+# Generate the split
+camels_split <- initial_split(camels, prop = 0.8)
+camels_train <- training(camels_split)
+camels_test  <- testing(camels_split)
+
+# Build resamples
+camels_cv <- vfold_cv(camels_train, v = 10)
+```
+
+# 2. Feature Engineering
+
+## Creating a recipe
+```{r}
+# Create a recipe to preprocess the data
+rec <-  recipe(logQmean ~ aridity + p_mean, data = camels_train) %>%
+  # Log transform the predictor variables (aridity and p_mean)
+  step_log(all_predictors()) %>%
+  # Add an interaction term between aridity and p_mean
+  step_interact(terms = ~ aridity:p_mean) |> 
+  # Drop any rows with missing values in the pred
+  step_naomit(all_predictors(), all_outcomes()) 
+```
+
+# 3. Resampling and Model Testing
+
+## Build 3 candidate models
+```{r}
+# Define Regression Models
+xgb_model <- boost_tree() |> 
+  set_engine("xgboost") |> 
+  set_mode("regression")
+
+dt_model <- decision_tree() |> 
+  set_engine("rpart") |> 
+  set_mode("regression")
+
+ranger_rf_model <- rand_forest() |> 
+  set_engine("ranger") |> 
+  set_mode("regression")
+```
+
+## Test the models
+```{r}
+wf <- workflow_set(list(rec), list(boost  = xgb_model, 
+                                  dt       = dt_model,
+                                  ranger   = ranger_rf_model)) |> 
+  workflow_map(resamples = camels_cv,
+               metrics   = metric_set(mae, rsq, rmse))
+
+autoplot(wf)
+
+rank_results(wf, rank_metric = "rsq", select_best = TRUE)
+```
+# 4. Model Selection
+
+## Model selection reasoning
+
+Based on the visualized models and ranked metrics I will select the random forest model. This choice is based on the fact that the linear regression model has the lowest RMSE of the three models and is ranked first out of all the metrics. 
+
+## Selected model description
+
+The model selected is a random forest model with type random forest, mode regression, and engine ranger. I think it is performing well for this problem because the simplicity of the model and high predictive accuracy is adequate for determining logQmean. Additionally, random forest models are robust to overfitting. 
+
+# 5. Model Tuning
+
+## A. Build a model for your chosen specification.
+```{r}
+forest_tune <- rand_forest(trees = tune(), min_n = tune()) |> 
+  set_engine("ranger") |> 
+  set_mode("regression")
+```
+
+## B. Create a workflow
+```{r}
+wf_tune <- workflow(rec, 
+                    rand_forest(mode       = "regression", 
+                               engine     = "ranger", 
+                               trees      = tune(), 
+                               min_n      = tune()))
+
+wf_tune = workflow() |>
+  add_recipe(rec) |>
+  add_model(forest_tune)
+```
+
+## C. Check tunable ranges/values
+```{r}
+dials <- extract_parameter_set_dials(wf_tune) 
+dials$object
+```
+## Define the search space
+```{r}
+my.grid <- dials |> 
+  update(trees = trees(c(1, 2000))) |>
+  grid_latin_hypercube(size = 25)
+```
+
+# 5B. Tune the Model
+
+## Run model parameters
+```{r}
+model_params <-  tune_grid(
+    wf_tune,
+    resamples = camels_cv,
+    grid = my.grid,
+    metrics = metric_set(rmse, rsq, mae),
+    control = control_grid(save_pred = TRUE)
+  )
+
+autoplot(model_params)
+```
+
+## Description
+
+I see that as minimal node size increases, mae decreases. Similarly, as minimal node size increases, rmse decreases. However, as minimal node size increases so does rsq. There seems to be no relationship between the number of trees and mae, rmse, and rsq. 
+
+# Check the skill of the tuned model
+
+## Use the collect_metrics() function to check the skill of the tuned model. Describe what you see, remember dplyr functions like arrange, slice_*, and filter will work on this tibble.
+```{r}
+tree_metrics = metric_set(rsq, rmse, mae)
+
+hp_best <- select_best(model_params, metric = "mae")
+
+finalize <- finalize_workflow(wf_tune, hp_best)
+
+final_fit <- last_fit(finalize, camels_split, metrics = tree_metrics)
+
+collect_metrics(final_fit)
+```
+
+## Collect_metrics interpretation
+
+I see that the estimates for rsq, rmse, and mae are all standard using the final fit model. The mae is the lowest of the metrics and the rsq is the highest. The relatively high rsq indicates strong correlation in the model. The relatively low rmse and mae indicates low prediction error.
+
+## Use the show_best() function to show the best performing model based on Mean Absolute Error.
+```{r}
+show_best(model_params, metric = "mae")
+```
+## Show_best interpretation
+
+We can see that the best performing models have different combinations of the number of trees and min_n. For example model 25 had 1210 trees and 34 min_n returned a mean mae of 0.377. 
+
+## Use the select_best() function to save the best performing hyperparameter set to an object called hp_best.
+```{r}
+hp_best <- select_best(model_params, metric = "mae")
+```
+
+# 7. Finalize Your Model
+
+## Run finalize_workflow() based on your workflow and best hyperparmater set to create a final workflow object.
+```{r}
+finalize <- finalize_workflow(wf_tune, hp_best)
+```
+
+# 8. Final Model Verification
+
+## Use last_fit() to fit the finalized workflow the original split object (output of initial_split()). This will fit the model to the training data and validate it on the testing data.
+```{r}
+final_fit <- last_fit(finalize, camels_split, metrics = tree_metrics)
+```
+
+## Use the collect_metrics() function to check the performance of the final model on the test data. This will return a tibble with the metrics for the final model.
+```{r}
+collect_metrics(final_fit)
+```
+
+## Interpret these results. How does the final model perform on the test data? Is it better or worse than the training data? Use your knowledge of the regression based metrics to describe the results.
+
+The final model performs well on the test data, and performs slightly better on the test data than on the training data. The model returned similar rsq values on both training and testing (~0.76) which indicates a high correlation for both applications of the model. However, the model returned a rmse of 0.60 for the training data and 0.59 for the testing data which means that the accuracy of the model on the testing data is slightly better. Similarly, the model returned a mae of 0.38 on the training data and 0.38 on the testing data, very similar, indicating an overall error that is low for both. 
+
+## Use the collect_predictions() function to check the predictions of the final model on the test data. This will return a tibble with the predictions for the final model.
+```{r}
+collect_predictions(final_fit) |> 
+  ggplot(aes(x = .pred, y = logQmean)) + 
+  geom_point() +
+  scale_color_viridis_c() +
+  geom_abline() + 
+  geom_smooth(method = "lm") + 
+  theme_linedraw() + 
+  labs(title = "Final Fit", 
+       x = "Predicted (Log10)", 
+       y = "Actual (Log10)")
+```
+# Final Step: Building a Map
+
+## This full fit can be passed to the augment() function to make predictions on the full, cleaned data. This will return a tibble with the predictions for the full data.
+```{r}
+full_pred = fit(finalize, data = camels) |>
+  augment(new_data = camels) 
+```
+
+## Use the mutate() function to calculate the residuals of the predictions. The residuals are the difference between the predicted values and the actual values squared.
+```{r}
+residuals <- full_pred |>
+  mutate(residuals=(.pred-logQmean)^2)
+```
+
+## Use ggplot2 to create a map of the predictions.
+```{r}
+ggplot(full_pred, aes(x = logQmean, y = .pred)) + 
+  geom_point() + 
+  geom_abline() +
+  geom_smooth(method = "lm") + 
+  labs(title = "Random Forest Model", 
+       x = "Actual (Log10)", 
+       y = "Predicted (Log10)", subtitle = ) + 
+  theme_minimal()
+```
+
+## Use ggplot2 to create a map of the residuals
+```{r}
+ggplot(residuals, aes(x = logQmean, y = residuals)) + 
+  geom_point() + 
+  geom_abline() +
+  geom_smooth(method = "lm") + 
+  labs(title = "Random Forest Model - Residuals", 
+       x = "Actual (Log10)", 
+       y = "Predicted (Log10)", subtitle = ) + 
+  theme_minimal()
+```
+## Use patchwork to combine the two maps into one figure.
+```{r}
+plot1 <- ggplot(full_pred, aes(x = logQmean, y = .pred)) + 
+  geom_point() + 
+  geom_abline() +
+  geom_smooth(method = "lm") + 
+  labs(title = "Random Forest Model", 
+       x = "Actual (Log10)", 
+       y = "Predicted (Log10)") + 
+  theme_minimal()
+
+plot2 <- ggplot(residuals, aes(x = logQmean, y = residuals)) + 
+  geom_point() + 
+  geom_abline() +
+  geom_smooth(method = "lm") + 
+  labs(title = "Random Forest Model - Residuals", 
+       x = "Actual (Log10)", 
+       y = "Residuals (Log10)") + 
+  theme_minimal()
+
+# Combine the two plots using patchwork
+plot1 + plot2
+```
+
+
+
+
