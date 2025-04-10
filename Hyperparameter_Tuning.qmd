@@ -1,8 +1,12 @@
 ---
 title: "Hyperparameter_Tuning"
 author: "Clara Jordan"
-format: html
+format: 
+  html: 
+    self-contained: true
 editor: visual
+execute: 
+  echo: true
 ---
 
 # Lab Set Up
